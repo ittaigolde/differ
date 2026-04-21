@@ -8,7 +8,8 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper 2>/dev/null || true"
+    "test": "node --test",
+    "postinstall": "node scripts/postinstall.js"
   },
   "dependencies": {
     "diff": "^7.0.0",

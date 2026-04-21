@@ -4,11 +4,16 @@
 const fs = require('fs');
 const net = require('net');
 const path = require('path');
+const readline = require('readline');
 const pty = require('node-pty');
 const { structuredPatch } = require('diff');
 
 const { writeLock, deleteLock } = require('./lockfile');
 const { createServer } = require('./server');
+const { resolveWorkspacePath } = require('./path-utils');
+const { resolveBin } = require('./bin-utils');
+const { parseWin32InputMode } = require('./win32-input');
+const { buildClaudeArgs } = require('./claude-args');
 const {
   buildRowList, countStats,
   nextHunkOffset, prevHunkOffset,
@@ -29,7 +34,6 @@ let scrollOffset = 0;
 let pageHeight   = 0;
 let currentDiff  = null;    // { params, resolve, stats, filePath, statusNote }
 let diffQueue    = [];
-let msgIndex     = 0;
 let recentFiles  = [];
 let lastChar     = null;    // for ]c / [c sequences
 let isShuttingDown = false;
@@ -37,6 +41,14 @@ let inAltScreen  = false;
 let port         = null;
 let wsServer     = null;
 let claudeChild  = null;
+let workspaceRoot = process.cwd();
+let lastKeypressAt = 0;
+let lastPtyOutputAt = Date.now();
+let lastUserInputAt = Date.now();
+let ideClientConnected = false;
+let ideInitialized = false;
+let ideToolsListed = false;
+let ideWarningShown = false;
 
 let termWidth  = process.stdout.columns  || 80;
 let termHeight = process.stdout.rows     || 24;
@@ -49,6 +61,7 @@ function parseArgs(argv) {
     portMin: 10000,
     portMax: 65535,
     debugLog: null,
+    inputDebugLog: null,
     claudeArgs: [],
   };
 
@@ -64,6 +77,8 @@ function parseArgs(argv) {
       result.debugLog = (args[i + 1] && !args[i + 1].startsWith('-'))
         ? args[++i]
         : '/tmp/claude-diff-tui-debug.log';
+    } else if (args[i] === '--input-debug' && args[i + 1]) {
+      result.inputDebugLog = args[++i];
     } else if (args[i] === '--resume' && args[i + 1]) {
       result.claudeArgs.push('--resume', args[++i]);
     } else if (args[i] === '--') {
@@ -106,32 +121,69 @@ function exitAltScreen() {
   if (!inAltScreen) return;
   inAltScreen = false;
   if (process.stdout.isTTY) {
-    process.stdout.write(SHOW_CURSOR + ALT_OFF);
+    process.stdout.write(ALT_OFF);
   }
   // Flush any Claude output that arrived while we owned the screen
   for (const chunk of ptyOutputBuffer) process.stdout.write(chunk);
   ptyOutputBuffer = [];
-}
-
-// Raw mode is set once at startup. enableRawMode/disableRawMode are no-ops
-// kept so call sites compile; stdin routing happens in the single data handler.
-function enableRawMode() {}
-function disableRawMode() {}
-
-// ── Keypress handling ──────────────────────────────────────────────────────────
-function onStdinData(buf) {
-  if (state === 'showing-diff') {
-    onKeyData(buf);
-  } else {
-    // Pass through to Claude's pty
-    if (claudeChild) claudeChild.write(buf.toString('binary'));
+  if (process.stdout.isTTY) {
+    process.stdout.write(SHOW_CURSOR);
   }
 }
 
-function onKeyData(buf) {
-  // Only called when state === 'showing-diff'
+// ── Keypress handling ──────────────────────────────────────────────────────────
+let inputDebugStream = null;
 
-  const str = buf.toString('utf8');
+function logInputEvent(kind, details) {
+  if (!inputDebugStream) return;
+  const payload = {
+    ts: new Date().toISOString(),
+    kind,
+    state,
+    ...details,
+  };
+  inputDebugStream.write(JSON.stringify(payload) + '\n');
+}
+
+function onStdinKeypress(str, key = {}) {
+  lastUserInputAt = Date.now();
+  lastKeypressAt = Date.now();
+  const sequence = key.sequence || str || '';
+  logInputEvent('keypress', {
+    str,
+    sequence,
+    key: { name: key.name, ctrl: key.ctrl, meta: key.meta, shift: key.shift },
+  });
+  if (state === 'showing-diff') {
+    onKeyData(Buffer.from(sequence, 'utf8'), str, key);
+  } else {
+    // Pass through to Claude's pty
+    if (claudeChild && sequence) claudeChild.write(sequence);
+  }
+}
+
+function onStdinDataFallback(buf) {
+  lastUserInputAt = Date.now();
+  logInputEvent('data', { bytes: [...buf] });
+  if (state === 'showing-diff' && handleWin32InputMode(buf)) return;
+  if (state !== 'showing-diff') return;
+  if (Date.now() - lastKeypressAt < 25) return;
+  onKeyData(buf);
+}
+
+function handleWin32InputMode(buf) {
+  const parsed = parseWin32InputMode(buf);
+  if (!parsed) return false;
+  if (parsed.action === 'accept') acceptDiff();
+  else if (parsed.action === 'reject') rejectDiff(false);
+  else if (parsed.action === 'reject-exit') rejectDiff(true);
+  else if (parsed.action === 'scroll-down') scrollDown(1);
+  else if (parsed.action === 'scroll-up') scrollUp(1);
+  return true;
+}
+
+function onKeyData(buf, str = buf.toString('utf8'), key = {}) {
+  // Only called when state === 'showing-diff'
 
   // Two-char vim sequences: ]c and [c
   if (lastChar === ']' && str === 'c') { lastChar = null; jumpNextHunk(); return; }
@@ -140,17 +192,26 @@ function onKeyData(buf) {
   lastChar = null;
 
   // Arrow keys and escape sequences
-  if (str === '\x1b[A' || str === 'k') { scrollUp(1);          return; }
-  if (str === '\x1b[B' || str === 'j') { scrollDown(1);        return; }
-  if (str === '\x1b[5~' || buf[0] === 0x02) { scrollUp(pageHeight);   return; } // PgUp / Ctrl+B
-  if (str === '\x1b[6~' || buf[0] === 0x06) { scrollDown(pageHeight); return; } // PgDn / Ctrl+F
+  if (key.name === 'up' || str === '\x1b[A' || str === 'k') { scrollUp(1);          return; }
+  if (key.name === 'down' || str === '\x1b[B' || str === 'j') { scrollDown(1);        return; }
+  if (key.name === 'pageup' || (key.ctrl && key.name === 'b') || str === '\x1b[5~' || buf[0] === 0x02) {
+    scrollUp(pageHeight);
+    return;
+  }
+  if (key.name === 'pagedown' || (key.ctrl && key.name === 'f') || str === '\x1b[6~' || buf[0] === 0x06) {
+    scrollDown(pageHeight);
+    return;
+  }
 
-  // Single byte keys
+  // Single-key commands. Some terminals can deliver printable keys with extra
+  // bytes in the same chunk, so key off the first character instead of requiring
+  // an exact one-byte buffer.
   const b = buf[0];
-  if (b === 0x79) { acceptDiff();       return; }  // y
-  if (b === 0x6E) { rejectDiff(false);  return; }  // n
-  if (b === 0x1B && buf.length === 1) { rejectDiff(false); return; }  // Esc
-  if (b === 0x03) { rejectDiff(true);   return; }  // Ctrl+C
+  const firstChar = str[0] || '';
+  if (firstChar === 'y' || firstChar === 'Y') { acceptDiff();       return; }
+  if (firstChar === 'n' || firstChar === 'N') { rejectDiff(false);  return; }
+  if (key.name === 'escape' || (b === 0x1B && buf.length === 1)) { rejectDiff(false); return; }
+  if ((key.ctrl && key.name === 'c') || b === 0x03) { rejectDiff(true);   return; }
 }
 
 function scrollUp(n) {
@@ -177,7 +238,8 @@ function jumpPrevHunk() {
 // ── Diff lifecycle ─────────────────────────────────────────────────────────────
 function showDiff(item) {
   const { params } = item;
-  const filePath = params.old_file_path || params.tab_name || 'unknown';
+  const sourcePath = params.old_file_path || params.new_file_path || params.tab_name || 'unknown';
+  const filePath = resolveWorkspacePath(sourcePath, workspaceRoot);
 
   if (!recentFiles.includes(filePath)) {
     recentFiles.unshift(filePath);
@@ -205,10 +267,9 @@ function showDiff(item) {
   lastChar = null;
 
   const stats = countStats(rowList);
-  currentDiff = { params, resolve: item.resolve, stats, filePath, statusNote };
+  currentDiff = { params, resolve: item.resolve, stats, filePath, sourcePath, statusNote };
 
   enterAltScreen();
-  enableRawMode();
   draw();
 }
 
@@ -216,29 +277,26 @@ function acceptDiff() {
   const { resolve, params } = currentDiff;
   state = 'post-accept';
   draw();
-  disableRawMode();
   resolve({ accepted: true, newContents: params.new_file_contents || '' });
   currentDiff = null;
-  setTimeout(nextDiffOrWait, 800);
+  setTimeout(nextDiffOrWait, 0);
 }
 
 function rejectDiff(shouldExit) {
   const { resolve, params } = currentDiff;
   state = 'post-reject';
   draw();
-  disableRawMode();
   resolve({ accepted: false, newContents: params.new_file_contents || '' });
   currentDiff = null;
   if (shouldExit) {
-    setTimeout(() => startCleanup(0), 400);
+    setTimeout(() => startCleanup(0), 0);
   } else {
-    setTimeout(nextDiffOrWait, 800);
+    setTimeout(nextDiffOrWait, 0);
   }
 }
 
 function nextDiffOrWait() {
   exitAltScreen();  // also flushes ptyOutputBuffer
-  msgIndex++;
   if (diffQueue.length > 0) {
     showDiff(diffQueue.shift());
   } else {
@@ -271,11 +329,40 @@ function draw() {
   }, termWidth);
 
   const frame = renderDiffFrame(rowList, scrollOffset, pageHeight, statusLine, termWidth);
-  process.stdout.write('\x1b[?25l' + frame + '\x1b[?25h');
+  process.stdout.write(HIDE_CURSOR + frame);
 }
 
-function drawWaiting() {
-  process.stdout.write(renderWaiting(termWidth, termHeight, msgIndex));
+function writeWhenTerminalIdle(message, idleMs = 500) {
+  const tryWrite = () => {
+    const now = Date.now();
+    const outputIdle = now - lastPtyOutputAt >= idleMs;
+    const inputIdle = now - lastUserInputAt >= idleMs;
+    if (ideToolsListed || isShuttingDown) return;
+    if (outputIdle && inputIdle && !inAltScreen) {
+      process.stderr.write(`\r\n${message}\r\n`);
+      return;
+    }
+    setTimeout(tryWrite, idleMs);
+  };
+  setTimeout(tryWrite, idleMs);
+}
+
+function scheduleIdeReadinessWarning(delayMs = 3500) {
+  setTimeout(() => {
+    if (ideToolsListed || ideWarningShown || isShuttingDown) return;
+    ideWarningShown = true;
+
+    const status = ideInitialized
+      ? 'connected, but has not listed IDE tools'
+      : ideClientConnected
+        ? 'connected, but has not initialized IDE mode'
+        : 'not connected to IDE mode';
+
+    writeWhenTerminalIdle(
+      `[claude-diff-tui] Claude has ${status}; diff review may not be active.\r\n` +
+      '[claude-diff-tui] In Claude, run /ide and select claude-diff-tui. For logs, run with --debug ./ws.log.'
+    );
+  }, delayMs);
 }
 
 // ── Resize ─────────────────────────────────────────────────────────────────────
@@ -294,6 +381,10 @@ process.stdout.on('resize', () => {
 async function main() {
   const cliArgs = parseArgs(process.argv);
   const workspacePath = path.resolve(cliArgs.workspace);
+  workspaceRoot = workspacePath;
+  if (cliArgs.inputDebugLog) {
+    inputDebugStream = fs.createWriteStream(cliArgs.inputDebugLog, { flags: 'a' });
+  }
 
   // 1. Find free port
   port = await findFreePort(cliArgs.portMin, cliArgs.portMax);
@@ -335,10 +426,23 @@ async function main() {
         }
       });
     },
+    onClientConnected() {
+      ideClientConnected = true;
+    },
+    onInitialize() {
+      ideInitialized = true;
+    },
+    onToolsList() {
+      ideToolsListed = true;
+    },
     onCloseTab(tabName) {
       // If the closed tab matches our current diff, clear it
-      if (currentDiff && (currentDiff.filePath === tabName || currentDiff.params.tab_name === tabName)) {
-        disableRawMode();
+      const resolvedTabName = resolveWorkspacePath(tabName, workspaceRoot);
+      if (currentDiff && (
+        currentDiff.filePath === resolvedTabName ||
+        currentDiff.sourcePath === tabName ||
+        currentDiff.params.tab_name === tabName
+      )) {
         currentDiff = null;
         setTimeout(nextDiffOrWait, 0);
       }
@@ -356,32 +460,27 @@ async function main() {
 
   // 5. Own stdin — set raw mode once, route based on state
   if (process.stdin.isTTY) {
+    readline.emitKeypressEvents(process.stdin);
     process.stdin.setRawMode(true);
     process.stdin.resume();
-    process.stdin.on('data', onStdinData);
+    process.stdin.on('keypress', onStdinKeypress);
+    process.stdin.on('data', onStdinDataFallback);
   }
 
   // 6. Spawn claude in a pty (gets its own TTY, no stdin competition)
   pageHeight = termHeight - 3;
   spawnClaude(workspacePath, cliArgs.claudeArgs);
+  scheduleIdeReadinessWarning();
 }
 
 // Pty output buffered while diff screen is active, flushed on return
 let ptyOutputBuffer = [];
 
-function resolveBin(name) {
-  const { execSync } = require('child_process');
-  try {
-    return execSync(`which ${name}`, { encoding: 'utf8', env: process.env }).trim();
-  } catch (_) {
-    return name;
-  }
-}
-
 function spawnClaude(workspacePath, extraArgs) {
   const claudeBin = resolveBin('claude');
+  const claudeArgs = buildClaudeArgs(extraArgs);
   try {
-    claudeChild = pty.spawn(claudeBin, extraArgs, {
+    claudeChild = pty.spawn(claudeBin, claudeArgs, {
       name: 'xterm-256color',
       cols: termWidth,
       rows: termHeight,
@@ -403,6 +502,7 @@ function spawnClaude(workspacePath, extraArgs) {
   }
 
   claudeChild.onData((data) => {
+    lastPtyOutputAt = Date.now();
     if (inAltScreen) {
       // Diff screen is active — buffer Claude's output for later
       ptyOutputBuffer.push(data);
@@ -442,6 +542,10 @@ function startCleanup(exitCode) {
   }
 
   if (wsServer) { try { wsServer.cleanup(); } catch (_) {} }
+  if (inputDebugStream) {
+    try { inputDebugStream.end(); } catch (_) {}
+    inputDebugStream = null;
+  }
 
   if (claudeChild) {
     try { claudeChild.kill(); } catch (_) {}

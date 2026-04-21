@@ -9,12 +9,15 @@ const BOLD = '\x1b[1m';
 const FG_GREEN = '\x1b[32m';
 const FG_RED = '\x1b[31m';
 const FG_YELLOW = '\x1b[33m';
-const FG_GRAY = '\x1b[90m';
 const BG_DEL = '\x1b[48;5;52m';   // dark red bg
 const BG_ADD = '\x1b[48;5;22m';   // dark green bg
 const BG_HDR = '\x1b[48;5;236m';  // dark gray for hunk headers
 const DIV = '│';
 const EL = '\x1b[K';              // erase to end of line
+
+function style(text, ...codes) {
+  return codes.join('') + text + R;
+}
 
 function truncate(str, maxLen) {
   if (maxLen <= 0) return '';
@@ -150,18 +153,17 @@ function renderRow(row, width) {
   if (row.type === 'context') {
     const num = String(row.leftLineNo).padStart(lineNumW);
     const num2 = String(row.rightLineNo).padStart(lineNumW);
-    const content = truncate(row.content, contentW);
-    const left = DIM + num + ' ' + content + R;
-    const right = DIM + num2 + ' ' + truncate(row.content, Math.max(0, rightW - lineNumW - 1)) + R;
-    return left.padEnd(halfW) + DIV + right + EL;
+    const leftPlain = (num + ' ' + truncate(row.content, contentW)).padEnd(halfW);
+    const rightPlain = (num2 + ' ' + truncate(row.content, Math.max(0, rightW - lineNumW - 1))).padEnd(rightW);
+    return style(leftPlain, DIM) + DIV + style(rightPlain, DIM) + EL;
   }
 
   if (row.type === 'deleted') {
     const num = String(row.leftLineNo).padStart(lineNumW);
     const content = truncate(row.content, contentW);
-    const left = BG_DEL + '\x1b[37m' + num + R + BG_DEL + ' ' + content + R;
+    const left = (num + ' ' + content).padEnd(halfW);
     const right = ' '.repeat(rightW);
-    return left + DIV + right + EL;
+    return style(left, BG_DEL, '\x1b[37m') + DIV + right + EL;
   }
 
   if (row.type === 'added') {
@@ -169,17 +171,17 @@ function renderRow(row, width) {
     const contentW2 = Math.max(0, rightW - lineNumW - 1);
     const content = truncate(row.content, contentW2);
     const left = ' '.repeat(halfW);
-    const right = BG_ADD + '\x1b[37m' + num + R + BG_ADD + ' ' + content + R;
-    return left + DIV + right + EL;
+    const right = (num + ' ' + content).padEnd(rightW);
+    return left + DIV + style(right, BG_ADD, '\x1b[37m') + EL;
   }
 
   if (row.type === 'modified') {
     const lnum = String(row.leftLineNo).padStart(lineNumW);
     const rnum = String(row.rightLineNo).padStart(lineNumW);
     const contentW2 = Math.max(0, rightW - lineNumW - 1);
-    const left = BG_DEL + '\x1b[37m' + lnum + R + BG_DEL + ' ' + truncate(row.leftContent, contentW) + R;
-    const right = BG_ADD + '\x1b[37m' + rnum + R + BG_ADD + ' ' + truncate(row.rightContent, contentW2) + R;
-    return left + DIV + right + EL;
+    const left = (lnum + ' ' + truncate(row.leftContent, contentW)).padEnd(halfW);
+    const right = (rnum + ' ' + truncate(row.rightContent, contentW2)).padEnd(rightW);
+    return style(left, BG_DEL, '\x1b[37m') + DIV + style(right, BG_ADD, '\x1b[37m') + EL;
   }
 
   return '';
@@ -211,6 +213,9 @@ function renderStatusLine(opts, width) {
   const right = `  ${hint} `;
 
   const available = width - right.length;
+  if (available <= 0) {
+    return '\x1b[7m' + truncate(hint, width) + R;
+  }
   const leftTrunc = left.length > available ? left.slice(0, available - 1) + '…' : left.padEnd(available);
 
   return '\x1b[7m' + leftTrunc + right + R;

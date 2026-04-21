@@ -28,6 +28,7 @@ It implements the [Claude Code IDE integration protocol](https://github.com/anth
 
 - Node.js ≥ 18
 - `claude` CLI installed (`npm install -g @anthropic-ai/claude-code`)
+- A terminal with TTY support
 
 ## Install
 
@@ -36,6 +37,8 @@ cd /path/to/this/repo
 npm install
 npm link          # makes `claude-diff-tui` available globally
 ```
+
+The install step also applies a small compatibility fix for `node-pty` on macOS ARM when needed.
 
 ## Usage
 
@@ -51,12 +54,27 @@ claude-diff-tui --resume <session-id>
 
 # Debug WebSocket traffic (useful if something feels off):
 claude-diff-tui --debug /tmp/ws.log
+
+# Debug terminal input handling:
+claude-diff-tui --input-debug /tmp/input.log
 ```
+
+When `--workspace` is provided, relative paths from Claude are resolved against that workspace. This lets you launch `claude-diff-tui` from another directory while still reviewing the right files.
 
 Any arguments after `--` are passed directly to `claude`:
 
 ```sh
 claude-diff-tui -- --model claude-opus-4-7
+```
+
+`claude-diff-tui` starts Claude with `--ide` automatically so Claude can connect to the bridge without selecting it from `/ide` every run.
+
+If Claude does not connect to IDE mode a few seconds after startup, `claude-diff-tui` prints a one-time warning once the terminal has been idle briefly. This warning means diff review may not be active yet; in Claude, run `/ide` and select `claude-diff-tui`, or check that Claude was started with IDE support enabled.
+
+You can also constrain port discovery:
+
+```sh
+claude-diff-tui --port-min 12000 --port-max 12100
 ```
 
 ## Keys
@@ -84,8 +102,18 @@ claude-diff-tui -- --model claude-opus-4-7
 
 No patches to Claude. No config changes. Nothing persistent except the lock file while running.
 
+## Development
+
+Run the test suite with:
+
+```sh
+npm test
+```
+
+The tests cover protocol response routing, workspace-relative path resolution, and terminal diff row width rendering.
+
 ## Caveats
 
 - Diagnostics (`getDiagnostics`) always return empty. Claude may occasionally wonder why your code has no errors. Let it wonder.
 - If Claude proposes multiple file changes, they queue up. You review them one at a time.
-- Works on macOS and Linux. Windows support requires someone who uses Windows.
+- Windows, macOS, and Linux should work, subject to `node-pty` support for your terminal and Node.js version.

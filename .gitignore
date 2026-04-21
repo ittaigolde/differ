@@ -1,2 +1,4 @@
 node_modules/
 *.log
+input-debug.lo
+visual-test/

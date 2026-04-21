@@ -88,6 +88,8 @@ function createServer({ port, callbacks, debugLog }) {
   }
 
   wss.on('connection', (ws) => {
+    callbacks.onClientConnected && callbacks.onClientConnected();
+
     ws.on('message', (data) => {
       const raw = data.toString();
       log('IN', raw);
@@ -98,6 +100,7 @@ function createServer({ port, callbacks, debugLog }) {
       const { method, id, params } = msg;
 
       if (method === 'initialize') {
+        callbacks.onInitialize && callbacks.onInitialize();
         send(ws, {
           jsonrpc: '2.0', id,
           result: {
@@ -112,6 +115,7 @@ function createServer({ port, callbacks, debugLog }) {
       }
 
       if (method === 'tools/list') {
+        callbacks.onToolsList && callbacks.onToolsList();
         send(ws, { jsonrpc: '2.0', id, result: { tools: TOOLS } });
         return;
       }
@@ -135,10 +139,10 @@ function createServer({ port, callbacks, debugLog }) {
     switch (name) {
       case 'openDiff': {
         const tabName = args.tab_name || args.old_file_path || 'unknown';
-        const deferKey = `openDiff-${tabName}`;
+        const deferKey = id;
 
-        // Store id — do NOT send any response yet. Claude waits until we respond.
-        deferredMap.set(deferKey, { id, ws });
+        // Store by JSON-RPC id, not tab name; multiple diffs can target one file.
+        deferredMap.set(deferKey, { id, ws, tabName });
 
         // Kick off the async diff UI
         callbacks.onOpenDiff(args).then(({ accepted, newContents }) => {
@@ -154,7 +158,7 @@ function createServer({ port, callbacks, debugLog }) {
           } else {
             send(stored.ws, toolResult(stored.id, [
               { type: 'text', text: 'DIFF_REJECTED' },
-              { type: 'text', text: tabName },
+              { type: 'text', text: stored.tabName },
             ]));
           }
         }).catch(() => {
@@ -163,7 +167,7 @@ function createServer({ port, callbacks, debugLog }) {
           deferredMap.delete(deferKey);
           send(stored.ws, toolResult(stored.id, [
             { type: 'text', text: 'DIFF_REJECTED' },
-            { type: 'text', text: tabName },
+            { type: 'text', text: stored.tabName },
           ]));
         });
         break;
@@ -190,16 +194,16 @@ function createServer({ port, callbacks, debugLog }) {
       case 'close_tab': {
         // If this tab has a pending openDiff, treat close as rejection
         const closedTab = args.tab_name || '';
-        const closeKey = `openDiff-${closedTab}`;
-        if (deferredMap.has(closeKey)) {
-          const stored = deferredMap.get(closeKey);
+        const closeEntries = [...deferredMap.entries()]
+          .filter(([, stored]) => stored.tabName === closedTab);
+        for (const [closeKey, stored] of closeEntries) {
           deferredMap.delete(closeKey);
           send(stored.ws, toolResult(stored.id, [
             { type: 'text', text: 'DIFF_REJECTED' },
             { type: 'text', text: closedTab },
           ]));
-          callbacks.onCloseTab && callbacks.onCloseTab(closedTab);
         }
+        if (closeEntries.length > 0) callbacks.onCloseTab && callbacks.onCloseTab(closedTab);
         send(ws, toolResult(id, textContent('"ok"')));
         break;
       }
