@@ -1,0 +1,21 @@
+{
+  "name": "claude-diff-tui",
+  "version": "0.1.0",
+  "description": "Terminal UI for reviewing Claude Code file diffs interactively",
+  "type": "commonjs",
+  "bin": {
+    "claude-diff-tui": "./src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper 2>/dev/null || true"
+  },
+  "dependencies": {
+    "diff": "^7.0.0",
+    "node-pty": "^1.1.0",
+    "ws": "^8.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
