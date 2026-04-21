@@ -19,7 +19,7 @@ function writeLock(port, workspaceFolders) {
   const content = JSON.stringify({
     pid: process.pid,
     workspaceFolders,
-    ideName: 'claude-diff-tui',
+    ideName: 'differ',
     transport: 'ws',
   });
 

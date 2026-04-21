@@ -105,7 +105,7 @@ function createServer({ port, callbacks, debugLog }) {
           jsonrpc: '2.0', id,
           result: {
             protocolVersion: '2024-11-05',
-            serverInfo: { name: 'claude-diff-tui', version: '0.1.0' },
+            serverInfo: { name: 'differ', version: '0.1.0' },
             capabilities: { tools: {} },
           },
         });

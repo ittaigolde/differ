@@ -1,4 +1,4 @@
-# claude-diff-tui
+# differ
 
 **Side-by-side diff review for Claude Code, without leaving your terminal.** One keypress to accept or reject — no IDE, no context switch, no friction.
 
@@ -32,49 +32,63 @@ It implements the [Claude Code IDE integration protocol](https://github.com/anth
 
 ## Install
 
+Install from npm:
+
 ```sh
-cd /path/to/this/repo
-npm install
-npm link          # makes `claude-diff-tui` available globally
+npm install -g @ittaigolde/differ
+```
+
+Then run it from any project directory:
+
+```sh
+differ
 ```
 
 The install step also applies a small compatibility fix for `node-pty` on macOS ARM when needed.
 
+### Local Development
+
+```sh
+cd /path/to/this/repo
+npm install
+npm link          # makes `differ` available globally
+```
+
 ## Usage
 
 ```sh
-# In your project directory:
-claude-diff-tui
+# In your project directory, after installing from npm:
+differ
 
 # With a specific workspace:
-claude-diff-tui --workspace /path/to/project
+differ --workspace /path/to/project
 
 # Resume a previous session:
-claude-diff-tui --resume <session-id>
+differ --resume <session-id>
 
 # Debug WebSocket traffic (useful if something feels off):
-claude-diff-tui --debug /tmp/ws.log
+differ --debug /tmp/ws.log
 
 # Debug terminal input handling:
-claude-diff-tui --input-debug /tmp/input.log
+differ --input-debug /tmp/input.log
 ```
 
-When `--workspace` is provided, relative paths from Claude are resolved against that workspace. This lets you launch `claude-diff-tui` from another directory while still reviewing the right files.
+When `--workspace` is provided, relative paths from Claude are resolved against that workspace. This lets you launch `differ` from another directory while still reviewing the right files.
 
 Any arguments after `--` are passed directly to `claude`:
 
 ```sh
-claude-diff-tui -- --model claude-opus-4-7
+differ -- --model claude-opus-4-7
 ```
 
-`claude-diff-tui` starts Claude with `--ide` automatically so Claude can connect to the bridge without selecting it from `/ide` every run.
+`differ` starts Claude with `--ide` automatically so Claude can connect to the bridge without selecting it from `/ide` every run.
 
-If Claude does not connect to IDE mode a few seconds after startup, `claude-diff-tui` prints a one-time warning once the terminal has been idle briefly. This warning means diff review may not be active yet; in Claude, run `/ide` and select `claude-diff-tui`, or check that Claude was started with IDE support enabled.
+If Claude does not connect to IDE mode a few seconds after startup, `differ` prints a one-time warning once the terminal has been idle briefly. This warning means diff review may not be active yet; in Claude, run `/ide` and select `differ`, or check that Claude was started with IDE support enabled.
 
 You can also constrain port discovery:
 
 ```sh
-claude-diff-tui --port-min 12000 --port-max 12100
+differ --port-min 12000 --port-max 12100
 ```
 
 ## Keys

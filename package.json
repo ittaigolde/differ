@@ -1,15 +1,43 @@
 {
-  "name": "claude-diff-tui",
+  "name": "@ittaigolde/differ",
   "version": "0.1.0",
-  "description": "Terminal UI for reviewing Claude Code file diffs interactively",
+  "description": "Terminal diff review bridge for Claude Code",
   "type": "commonjs",
   "bin": {
-    "claude-diff-tui": "./src/index.js"
+    "differ": "src/index.js"
   },
+  "files": [
+    "src/",
+    "scripts/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "scripts": {
     "start": "node src/index.js",
     "test": "node --test",
     "postinstall": "node scripts/postinstall.js"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "diff",
+    "tui",
+    "terminal",
+    "ide"
+  ],
+  "author": "Ittai Golde",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ittaigolde/differ.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ittaigolde/differ/issues"
+  },
+  "homepage": "https://github.com/ittaigolde/differ#readme",
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "diff": "^7.0.0",

@@ -76,7 +76,7 @@ function parseArgs(argv) {
     } else if (args[i] === '--debug') {
       result.debugLog = (args[i + 1] && !args[i + 1].startsWith('-'))
         ? args[++i]
-        : '/tmp/claude-diff-tui-debug.log';
+        : '/tmp/differ-debug.log';
     } else if (args[i] === '--input-debug' && args[i + 1]) {
       result.inputDebugLog = args[++i];
     } else if (args[i] === '--resume' && args[i + 1]) {
@@ -359,8 +359,8 @@ function scheduleIdeReadinessWarning(delayMs = 3500) {
         : 'not connected to IDE mode';
 
     writeWhenTerminalIdle(
-      `[claude-diff-tui] Claude has ${status}; diff review may not be active.\r\n` +
-      '[claude-diff-tui] In Claude, run /ide and select claude-diff-tui. For logs, run with --debug ./ws.log.'
+      `[differ] Claude has ${status}; diff review may not be active.\r\n` +
+      '[differ] In Claude, run /ide and select differ. For logs, run with --debug ./ws.log.'
     );
   }, delayMs);
 }

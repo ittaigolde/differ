@@ -3,7 +3,8 @@
 ## Unreleased
 
 ### Fixed
-- Start Claude with `--ide` by default so it can auto-connect to `claude-diff-tui`
+- Rename the npm package to `@ittaigolde/differ` and expose the CLI as `differ`
+- Start Claude with `--ide` by default so it can auto-connect to `differ`
 - Key deferred `openDiff` responses by JSON-RPC request id so repeated diffs for the same tab/file do not overwrite each other
 - Resolve relative diff paths against `--workspace`
 - Preserve side-by-side diff column width when rows contain ANSI styling
